@@ -395,6 +395,11 @@
             return cycle[(cycle.indexOf(last) + 1) % 3];
         }
 
+        function getRepRange(intensity) {
+            const ranges = { 'LIGHT': '30-40', 'MEDIUM': '15-30', 'HEAVY': '8-15' };
+            return ranges[intensity] || '';
+        }
+
         function finishWorkout() {
             state.logs.unshift(state.currentWorkout);
             state.view = 'dashboard';
@@ -481,6 +486,7 @@
                         <div>
                             <p class="text-[10px] font-black uppercase opacity-60 tracking-widest">Next Target:</p>
                             <p class="text-xl font-black italic uppercase leading-none">${calculateNextIntensity()}</p>
+                            <p class="text-sm font-bold opacity-70 mt-1">${getRepRange(calculateNextIntensity())} reps</p>
                         </div>
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" class="opacity-50"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                     </div>
@@ -495,6 +501,7 @@
                     <div class="text-center">
                         <p class="text-[9px] font-black text-slate-400 uppercase tracking-tighter">${wk.intensity} PHASE</p>
                         <p class="font-black italic uppercase leading-none text-slate-900">${wk.type}</p>
+                        <p class="text-[9px] font-bold text-blue-500 mt-0.5">${getRepRange(wk.intensity)} reps</p>
                     </div>
                     <button onclick="finishWorkout()" class="bg-slate-900 text-white px-5 py-2 rounded-2xl text-xs font-black italic uppercase">Save</button>
                 </div>
