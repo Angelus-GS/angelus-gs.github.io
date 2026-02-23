@@ -98,6 +98,12 @@
 
         // Request Google authorization, then run callback
         function withDriveAuth(callback) {
+            // If we already have a valid token, just run the callback directly
+            if (gapi.client.getToken() !== null) {
+                callback();
+                return;
+            }
+            // Otherwise, request a new token (first time only)
             tokenClient.callback = async (resp) => {
                 if (resp.error) {
                     showToast('Google sign-in failed', 'error');
@@ -105,11 +111,7 @@
                 }
                 await callback();
             };
-            if (gapi.client.getToken() === null) {
-                tokenClient.requestAccessToken({ prompt: 'consent' });
-            } else {
-                tokenClient.requestAccessToken({ prompt: '' });
-            }
+            tokenClient.requestAccessToken({ prompt: 'consent' });
         }
 
         // Find existing backup file in appDataFolder
