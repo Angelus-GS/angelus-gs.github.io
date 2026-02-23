@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Gorilla Gains">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="description" content="Serious Steel Fitness — Track your push and pull workouts with resistance bands.">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
     <title>Gorilla Gains</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -274,6 +279,15 @@
         }
 
         render();
+
+        // Register Service Worker for PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then((reg) => console.log('Service Worker registered:', reg.scope))
+                    .catch((err) => console.log('Service Worker registration failed:', err));
+            });
+        }
     </script>
 </body>
 </html>
