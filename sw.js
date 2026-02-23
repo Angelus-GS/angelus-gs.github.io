@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gorilla-gains-v3';
+const CACHE_NAME = 'gorilla-gains-v4';
 
 // Core assets to precache on install
 const PRECACHE_ASSETS = [

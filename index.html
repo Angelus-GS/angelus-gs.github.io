@@ -131,10 +131,18 @@
         }
 
         // Save data to Google Drive appDataFolder
-        async function saveToDrive() {
-            showToast('Saving to Google Drive...', 'info');
+        async function saveToDrive(silent = false) {
+            if (!silent) showToast('Saving to Google Drive...', 'info');
             try {
                 const existing = await findBackupFile();
+
+                // Safety check: prevent overwriting cloud backup with empty local data
+                if (state.logs.length === 0 && existing) {
+                    if (silent) return; // Auto-save: skip silently
+                    if (!confirm('Your local data is empty but you have a backup on Google Drive. Saving will overwrite it with nothing.\n\nDid you mean to Load from Drive instead?')) {
+                        return;
+                    }
+                }
                 const fileContent = JSON.stringify(state.logs, null, 2);
                 const metadata = {
                     name: BACKUP_FILENAME,
@@ -230,8 +238,9 @@
         // Auto-save to Drive silently (no prompts, only if already signed in)
         async function autoSaveToDrive() {
             if (!driveReady || !isGoogleSignedIn()) return;
+            if (state.logs.length === 0) return; // Never auto-save empty data
             try {
-                await saveToDrive();
+                await saveToDrive(true);
             } catch (err) {
                 console.error('Auto-save to Drive failed:', err);
             }
@@ -253,6 +262,26 @@
                 const cloudModified = new Date(file.modifiedTime).getTime();
                 const localModified = localStorage.getItem('gorilla_localModified');
                 const localTime = localModified ? new Date(localModified).getTime() : 0;
+
+                // After reinstall: no local timestamp and empty logs — always load from cloud
+                if (state.logs.length === 0 && !localModified) {
+                    const response = await gapi.client.drive.files.get({
+                        fileId: file.id,
+                        alt: 'media'
+                    });
+                    const importedLogs = typeof response.result === 'string'
+                        ? JSON.parse(response.result)
+                        : response.result;
+                    if (Array.isArray(importedLogs) && importedLogs.length > 0) {
+                        state.logs = importedLogs;
+                        localStorage.setItem('gorilla_v1_final', JSON.stringify(state.logs));
+                        localStorage.setItem('gorilla_lastDriveSync', new Date().toISOString());
+                        localStorage.setItem('gorilla_localModified', file.modifiedTime);
+                        showToast(`Restored ${importedLogs.length} workouts from Drive`, 'success');
+                        render();
+                    }
+                    return;
+                }
 
                 if (cloudModified > localTime) {
                     // Cloud is newer — load from Drive
