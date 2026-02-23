@@ -12,6 +12,8 @@
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
     <title>Gorilla Gains</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+    <script src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { 
@@ -27,6 +29,19 @@
         .video-container iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
         input[type="number"] { -moz-appearance: textfield; }
         input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .toast {
+            position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
+            padding: 12px 24px; border-radius: 1.5rem; font-size: 11px; font-weight: 800;
+            text-transform: uppercase; letter-spacing: 0.05em; z-index: 200;
+            animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+        }
+        .toast-success { background: #059669; color: white; }
+        .toast-error { background: #dc2626; color: white; }
+        .toast-info { background: #0f172a; color: white; }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+        @keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="select-none">
@@ -46,6 +61,196 @@
     <input type="file" id="importFile" accept=".json" class="hidden" onchange="handleImport(event)">
 
     <script>
+        // =============================================
+        // GOOGLE DRIVE CONFIG
+        // =============================================
+        const CLIENT_ID = '336608207955-454je6ofcqka7cu0mlv4vpoc2h65fmgr.apps.googleusercontent.com';
+        const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
+        const SCOPES = 'https://www.googleapis.com/auth/drive.appdata';
+        const BACKUP_FILENAME = 'gorilla-gains-backup.json';
+
+        let tokenClient;
+        let gapiInited = false;
+        let gisInited = false;
+        let driveReady = false;
+
+        function gapiLoaded() {
+            gapi.load('client', async () => {
+                await gapi.client.init({ discoveryDocs: [DISCOVERY_DOC] });
+                gapiInited = true;
+                checkDriveReady();
+            });
+        }
+
+        function gisLoaded() {
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                callback: '',
+            });
+            gisInited = true;
+            checkDriveReady();
+        }
+
+        function checkDriveReady() {
+            driveReady = gapiInited && gisInited;
+            if (state.view === 'settings') render();
+        }
+
+        // Request Google authorization, then run callback
+        function withDriveAuth(callback) {
+            tokenClient.callback = async (resp) => {
+                if (resp.error) {
+                    showToast('Google sign-in failed', 'error');
+                    return;
+                }
+                await callback();
+            };
+            if (gapi.client.getToken() === null) {
+                tokenClient.requestAccessToken({ prompt: 'consent' });
+            } else {
+                tokenClient.requestAccessToken({ prompt: '' });
+            }
+        }
+
+        // Find existing backup file in appDataFolder
+        async function findBackupFile() {
+            const response = await gapi.client.drive.files.list({
+                spaces: 'appDataFolder',
+                fields: 'files(id, name, modifiedTime)',
+                q: `name = '${BACKUP_FILENAME}'`
+            });
+            return response.result.files && response.result.files.length > 0
+                ? response.result.files[0]
+                : null;
+        }
+
+        // Save data to Google Drive appDataFolder
+        async function saveToDrive() {
+            showToast('Saving to Google Drive...', 'info');
+            try {
+                const existing = await findBackupFile();
+                const fileContent = JSON.stringify(state.logs, null, 2);
+                const metadata = {
+                    name: BACKUP_FILENAME,
+                    mimeType: 'application/json',
+                };
+
+                const boundary = '-------314159265358979323846';
+                const delimiter = '\r\n--' + boundary + '\r\n';
+                const closeDelimiter = '\r\n--' + boundary + '--';
+
+                if (existing) {
+                    // Update existing file
+                    const multipartBody =
+                        delimiter +
+                        'Content-Type: application/json\r\n\r\n' +
+                        JSON.stringify({ mimeType: 'application/json' }) +
+                        delimiter +
+                        'Content-Type: application/json\r\n\r\n' +
+                        fileContent +
+                        closeDelimiter;
+
+                    await gapi.client.request({
+                        path: `/upload/drive/v3/files/${existing.id}`,
+                        method: 'PATCH',
+                        params: { uploadType: 'multipart' },
+                        headers: { 'Content-Type': 'multipart/related; boundary="' + boundary + '"' },
+                        body: multipartBody,
+                    });
+                } else {
+                    // Create new file
+                    metadata.parents = ['appDataFolder'];
+                    const multipartBody =
+                        delimiter +
+                        'Content-Type: application/json\r\n\r\n' +
+                        JSON.stringify(metadata) +
+                        delimiter +
+                        'Content-Type: application/json\r\n\r\n' +
+                        fileContent +
+                        closeDelimiter;
+
+                    await gapi.client.request({
+                        path: '/upload/drive/v3/files',
+                        method: 'POST',
+                        params: { uploadType: 'multipart' },
+                        headers: { 'Content-Type': 'multipart/related; boundary="' + boundary + '"' },
+                        body: multipartBody,
+                    });
+                }
+
+                localStorage.setItem('gorilla_lastDriveSync', new Date().toISOString());
+                showToast('Saved to Google Drive!', 'success');
+                render();
+            } catch (err) {
+                console.error('Drive save error:', err);
+                showToast('Failed to save to Drive', 'error');
+            }
+        }
+
+        // Load data from Google Drive appDataFolder
+        async function loadFromDrive() {
+            showToast('Loading from Google Drive...', 'info');
+            try {
+                const file = await findBackupFile();
+                if (!file) {
+                    showToast('No backup found on Drive', 'error');
+                    return;
+                }
+
+                const response = await gapi.client.drive.files.get({
+                    fileId: file.id,
+                    alt: 'media'
+                });
+
+                const importedLogs = typeof response.result === 'string'
+                    ? JSON.parse(response.result)
+                    : response.result;
+
+                if (Array.isArray(importedLogs)) {
+                    state.logs = importedLogs;
+                    localStorage.setItem('gorilla_v1_final', JSON.stringify(state.logs));
+                    localStorage.setItem('gorilla_lastDriveSync', new Date().toISOString());
+                    showToast(`Loaded ${importedLogs.length} workouts from Drive!`, 'success');
+                    render();
+                } else {
+                    showToast('Invalid backup data on Drive', 'error');
+                }
+            } catch (err) {
+                console.error('Drive load error:', err);
+                showToast('Failed to load from Drive', 'error');
+            }
+        }
+
+        // Sign out of Google
+        function signOutGoogle() {
+            const token = gapi.client.getToken();
+            if (token !== null) {
+                google.accounts.oauth2.revoke(token.access_token);
+                gapi.client.setToken('');
+                showToast('Signed out of Google', 'info');
+                render();
+            }
+        }
+
+        function isGoogleSignedIn() {
+            return gapi.client && gapi.client.getToken() !== null;
+        }
+
+        // Toast notification
+        function showToast(message, type = 'info') {
+            const existing = document.querySelector('.toast');
+            if (existing) existing.remove();
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // =============================================
+        // APP STATE & CORE LOGIC
+        // =============================================
         const EXERCISE_DATA = {
             'Chest Press': { url: '5X_gPGYWYuA', optional: false },
             'Overhead Press': { url: '85C75KNm7Qo', optional: false },
@@ -85,7 +290,6 @@
 
         function openVideo(videoId) {
             const target = document.getElementById('videoTarget');
-            // Simplified embed URL to avoid Error 153/Player Configuration errors
             target.innerHTML = `<iframe src="https://www.youtube.com/embed/${videoId}?rel=0&autoplay=1&playsinline=1" allow="autoplay; fullscreen" allowfullscreen></iframe>`;
             document.getElementById('videoModal').classList.remove('hidden');
         }
@@ -147,6 +351,9 @@
             reader.readAsText(file);
         }
 
+        // =============================================
+        // RENDERING
+        // =============================================
         function render() {
             const app = document.getElementById('app');
             if (state.view === 'dashboard') renderDashboard(app);
@@ -246,22 +453,70 @@
         }
 
         function renderSettings(app) {
+            const lastSync = localStorage.getItem('gorilla_lastDriveSync');
+            const lastSyncText = lastSync
+                ? new Date(lastSync).toLocaleDateString() + ' ' + new Date(lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : 'Never';
+            const signedIn = isGoogleSignedIn();
+
             app.innerHTML = `
                 <div class="p-6 pt-12">
                     <h1 class="text-4xl font-black italic mb-8 uppercase tracking-tighter leading-none text-slate-900">Cloud<br>Backup</h1>
                     <div class="space-y-6">
+
+                        <!-- Google Drive Section -->
+                        <div class="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm text-center">
+                            <div class="w-16 h-16 bg-blue-600 text-white rounded-3xl flex items-center justify-center mx-auto mb-4">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/><path d="M12 18v-6"/><path d="M9 15l3-3 3 3"/></svg>
+                            </div>
+                            <h2 class="text-xl font-black italic uppercase mb-1 text-slate-900">Google Drive</h2>
+                            <p class="text-[10px] font-bold text-slate-400 mb-2 uppercase tracking-widest leading-relaxed">Sync across all devices</p>
+                            <p class="text-[10px] font-bold text-slate-300 mb-6">Last sync: ${lastSyncText}</p>
+                            ${driveReady ? `
+                                <div class="space-y-3">
+                                    <button onclick="withDriveAuth(saveToDrive)" class="btn-press w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest italic">
+                                        <svg class="inline-block mr-2 -mt-0.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5 5 5 5-5m-5 5V3"/></svg>
+                                        Save to Drive
+                                    </button>
+                                    <button onclick="withDriveAuth(loadFromDrive)" class="btn-press w-full bg-white border-2 border-blue-600 text-blue-600 py-4 rounded-2xl font-black text-xs uppercase tracking-widest italic">
+                                        <svg class="inline-block mr-2 -mt-0.5" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m14-7-5-5-5 5m5-5v12"/></svg>
+                                        Load from Drive
+                                    </button>
+                                    ${signedIn ? `
+                                        <button onclick="signOutGoogle()" class="w-full text-slate-300 py-2 text-[10px] font-black uppercase tracking-widest">Sign out of Google</button>
+                                    ` : ''}
+                                </div>
+                            ` : `
+                                <div class="bg-slate-50 p-4 rounded-2xl">
+                                    <p class="text-[10px] font-bold text-slate-400 italic">Loading Google Drive...</p>
+                                    <div class="spinner mt-2" style="border-color: rgba(0,0,0,0.1); border-top-color: #64748b;"></div>
+                                </div>
+                            `}
+                        </div>
+
+                        <!-- Divider -->
+                        <div class="flex items-center gap-4">
+                            <div class="flex-1 h-px bg-slate-100"></div>
+                            <p class="text-[9px] font-black text-slate-300 uppercase tracking-widest">Or use files</p>
+                            <div class="flex-1 h-px bg-slate-100"></div>
+                        </div>
+
+                        <!-- Manual Export -->
                         <div class="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm text-center">
                             <div class="w-16 h-16 bg-slate-900 text-white rounded-3xl flex items-center justify-center mx-auto mb-4"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5 5 5 5-5m-5 5V3"/></svg></div>
-                            <h2 class="text-xl font-black italic uppercase mb-1 text-slate-900">Export Data</h2>
-                            <p class="text-[10px] font-bold text-slate-400 mb-6 uppercase tracking-widest leading-relaxed">Save to Google Drive</p>
+                            <h2 class="text-xl font-black italic uppercase mb-1 text-slate-900">Export File</h2>
+                            <p class="text-[10px] font-bold text-slate-400 mb-6 uppercase tracking-widest leading-relaxed">Download JSON backup</p>
                             <button onclick="exportData()" class="btn-press w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest italic">Download Backup</button>
                         </div>
+
+                        <!-- Manual Import -->
                         <div class="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm text-center">
-                            <div class="w-16 h-16 bg-blue-600 text-white rounded-3xl flex items-center justify-center mx-auto mb-4"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m-7-7 5-5 5 5m-5-5v12"/></svg></div>
-                            <h2 class="text-xl font-black italic uppercase mb-1 text-slate-900">Import Data</h2>
-                            <p class="text-[10px] font-bold text-slate-400 mb-6 uppercase tracking-widest leading-relaxed">Restore from Drive</p>
-                            <button onclick="triggerImport()" class="btn-press w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest italic">Upload Backup</button>
+                            <div class="w-16 h-16 bg-slate-500 text-white rounded-3xl flex items-center justify-center mx-auto mb-4"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m14-7-5-5-5 5m5-5v12"/></svg></div>
+                            <h2 class="text-xl font-black italic uppercase mb-1 text-slate-900">Import File</h2>
+                            <p class="text-[10px] font-bold text-slate-400 mb-6 uppercase tracking-widest leading-relaxed">Restore from JSON file</p>
+                            <button onclick="triggerImport()" class="btn-press w-full bg-slate-500 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest italic">Upload Backup</button>
                         </div>
+
                     </div>
                 </div>`;
         }
